@@ -180,6 +180,8 @@ class FinancialService:
         last_exc: Exception | None = None
         for attempt in range(self.MAX_RETRIES):
             try:
+                # Prevent indefinite hangs on row-lock contention.
+                self.db.execute(text("SET LOCAL lock_timeout = '5s'"))
                 result = fn()
                 self.db.commit()
                 return result
@@ -239,7 +241,7 @@ class FinancialService:
             return True, rec
         # Key already exists (or was claimed by a concurrent txn).
         # Wait briefly for the competing transaction to resolve.
-        for _ in range(50):
+        for _ in range(100):
             rec = (
                 self.db.query(IdempotencyRecord)
                 .filter(

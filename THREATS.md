@@ -318,3 +318,193 @@ implementation and test evidence.
 - **Test evidence:** Trigger active in pg_trigger.
 - **Remaining risk:** None identified.
 - **Status:** Mitigated (verified).
+
+
+---
+
+## Advanced Attack Vectors (Hackathon Red-Team)
+
+### Timing & Concurrency
+
+## T-23 — Double-tap / double-click duplicate submit
+
+- **Threat ID:** T-23
+- **Description:** Rapid double-click on a money-moving button submits two requests.
+- **Attack scenario:** User double-clicks "Transfer".
+- **Impact:** Duplicate transfer.
+- **Affected component:** Frontend + idempotency.
+- **Mitigation:** Frontend disables button while in-flight; backend idempotency key (client generates one key per action via `crypto.randomUUID()`) ensures only one movement.
+- **Automated test:** `test_concurrent_identical_idempotency`.
+- **Status:** Mitigated (verified).
+
+## T-24 — Lock timeout / indefinite hang
+
+- **Threat ID:** T-24
+- **Description:** A stuck transaction holds row locks forever, hanging all dependent operations.
+- **Attack scenario:** Open transaction never commits.
+- **Impact:** Denial of service.
+- **Affected component:** Financial service.
+- **Mitigation:** `SET LOCAL lock_timeout = '5s'` per transaction; bounded deadlock retry.
+- **Automated test:** Implemented (config).
+- **Remaining risk:** Lock timeout surfaces as error to caller (safe).
+- **Status:** Mitigated (implemented).
+
+## T-25 — Deadlock from non-deterministic lock order
+
+- **Threat ID:** T-25
+- **Description:** Opposing transfers acquire locks in different orders.
+- **Mitigation:** Ascending UUID sort before `SELECT ... FOR UPDATE`.
+- **Automated test:** `test_opposing_transfers_no_deadlock`.
+- **Status:** Mitigated (verified).
+
+## T-26 — Race on idempotency claim
+
+- **Threat ID:** T-26
+- **Description:** Two identical requests race to claim the key.
+- **Mitigation:** `INSERT ... ON CONFLICT DO NOTHING` blocks on unique index; competing transaction resolves via cached response.
+- **Automated test:** `test_concurrent_identical_idempotency`.
+- **Status:** Mitigated (verified).
+
+## T-27 — Lost update on balance (read-modify-write without lock)
+
+- **Threat ID:** T-27
+- **Description:** Balance read then written without locking.
+- **Mitigation:** `SELECT ... FOR UPDATE` before mutation.
+- **Status:** Mitigated (implemented).
+
+### Idempotency & Replay
+
+## T-28 — Payload mutation with same key
+
+- **Threat ID:** T-28
+- **Mitigation:** SHA-256 canonical fingerprint; mismatch returns 422.
+- **Automated test:** `test_idempotency_payload_mismatch`.
+- **Status:** Mitigated (verified).
+
+## T-29 — Method/endpoint swap with same key
+
+- **Threat ID:** T-29
+- **Mitigation:** Fingerprint includes HTTP method and endpoint path.
+- **Status:** Mitigated (implemented).
+
+## T-30 — Key reuse after rollback
+
+- **Threat ID:** T-30
+- **Mitigation:** Rolled-back claim disappears; retry re-claims.
+- **Status:** Mitigated (implemented).
+
+## T-31 — Ambiguous commit outcome
+
+- **Threat ID:** T-31
+- **Mitigation:** Resolve via idempotency record, never blind retry.
+- **Status:** Mitigated (design).
+
+## T-32 — IN_PROGRESS left committed
+
+- **Threat ID:** T-32
+- **Mitigation:** Deferred trigger rejects non-terminal status.
+- **Status:** Mitigated (verified).
+
+## T-33 — Completed idempotency record tampering
+
+- **Threat ID:** T-33
+- **Mitigation:** `BEFORE UPDATE OR DELETE` trigger blocks.
+- **Status:** Mitigated (verified).
+
+### Math / Ledger Integrity
+
+## T-34 — Negative or zero amount
+
+- **Threat ID:** T-34
+- **Mitigation:** Pydantic `Field(gt=0)` + service `_validate_amount` (int, > 0).
+- **Status:** Mitigated (implemented).
+
+## T-35 — Floating-point injection
+
+- **Threat ID:** T-35
+- **Mitigation:** Pydantic enforces `int`; service rejects non-int/bool; BIGINT storage.
+- **Status:** Mitigated (implemented).
+
+## T-36 — Negative transfer amount
+
+- **Threat ID:** T-36
+- **Mitigation:** Amount validation rejects <= 0.
+- **Status:** Mitigated (implemented).
+
+## T-37 — Integer overflow
+
+- **Threat ID:** T-37
+- **Mitigation:** PostgreSQL BIGINT bounds raise on overflow.
+- **Status:** Mitigated (DB).
+
+## T-38 — Unrestricted system adjustment
+
+- **Threat ID:** T-38
+- **Mitigation:** No adjustment account; clearing accounts only via documented ops.
+- **Status:** Mitigated (implemented).
+
+## T-39 — Unbalanced transaction
+
+- **Threat ID:** T-39
+- **Mitigation:** Deferred trigger checks postings >= 2 and debits == credits.
+- **Status:** Mitigated (verified).
+
+### RBAC / Imposter
+
+## T-40 — Role escalation via registration
+
+- **Threat ID:** T-40
+- **Mitigation:** Public registration only ACCOUNT_HOLDER; privileged roles via admin.
+- **Automated test:** `test_register_privileged_role_rejected`.
+- **Status:** Mitigated (verified).
+
+## T-41 — JWT algorithm confusion (none)
+
+- **Threat ID:** T-41
+- **Mitigation:** `decode_access_token` rejects algorithms outside {HS256}; create uses HS256.
+- **Status:** Mitigated (implemented).
+
+## T-42 — Token reuse after logout
+
+- **Threat ID:** T-42
+- **Mitigation:** Revocation table checked in `get_current_user`.
+- **Automated test:** `test_logout_revokes_token`.
+- **Status:** Mitigated (verified).
+
+## T-43 — Inactive user access
+
+- **Threat ID:** T-43
+- **Mitigation:** `is_active` check in `get_current_user`.
+- **Status:** Mitigated (implemented).
+
+## T-44 — IDOR on statements
+
+- **Threat ID:** T-44
+- **Mitigation:** Ownership check; 404 on mismatch (no leakage).
+- **Automated test:** `test_holder_cannot_view_other_user`.
+- **Status:** Mitigated (verified).
+
+## T-45 — Auditor write attempt
+
+- **Threat ID:** T-45
+- **Mitigation:** `require_admin`/`require_admin_or_auditor` guards.
+- **Automated test:** `test_auditor_cannot_deposit`.
+- **Status:** Mitigated (verified).
+
+## T-46 — Admin direct customer withdrawal
+
+- **Threat ID:** T-46
+- **Mitigation:** Ownership check rejects (admin is not account owner).
+- **Status:** Mitigated (implemented).
+
+## T-47 — OTP brute force
+
+- **Threat ID:** T-47
+- **Mitigation:** 6-digit OTP, 5-min expiry, single-use, 5-attempt lockout.
+- **Status:** Mitigated (implemented).
+
+## T-48 — OTP replay
+
+- **Threat ID:** T-48
+- **Mitigation:** OTP cleared immediately on successful verification.
+- **Status:** Mitigated (implemented).

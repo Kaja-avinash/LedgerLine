@@ -43,14 +43,24 @@ def create_access_token(user_id: uuid.UUID, role: str) -> tuple[str, str, dateti
         "iat": datetime.now(timezone.utc),
         "exp": expires_at,
     }
-    token = jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+    token = jwt.encode(payload, settings.jwt_secret_key, algorithm="HS256")
     return token, jti, expires_at
+
+
+ALLOWED_ALGORITHMS = ["HS256"]
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
     """Decode and validate a JWT. Raises jwt.PyJWTError on failure."""
+    # Reject algorithm confusion (e.g. "none").
+    try:
+        header = jwt.get_unverified_header(token)
+    except jwt.PyJWTError:
+        raise
+    if header.get("alg") not in ALLOWED_ALGORITHMS:
+        raise jwt.InvalidAlgorithmError("Unsupported JWT algorithm")
     return jwt.decode(
         token,
         settings.jwt_secret_key,
-        algorithms=[settings.jwt_algorithm],
+        algorithms=ALLOWED_ALGORITHMS,
     )

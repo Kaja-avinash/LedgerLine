@@ -23,6 +23,10 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 PUBLIC_REGISTRATION_ROLE = "ACCOUNT_HOLDER"
 OTP_EXPIRY_MINUTES = 5
 
+# Simple in-memory failed-attempt tracker for OTP verification (per process).
+_otp_failures: dict[str, int] = {}
+OTP_MAX_ATTEMPTS = 5
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
@@ -99,15 +103,26 @@ def verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)) -> Logi
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No pending OTP for this account",
         )
+    if _otp_failures.get(payload.email, 0) >= OTP_MAX_ATTEMPTS:
+        user.otp_code = None
+        user.otp_expires_at = None
+        db.commit()
+        _otp_failures.pop(payload.email, None)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed OTP attempts",
+        )
     if datetime.now(timezone.utc) > user.otp_expires_at:
         user.otp_code = None
         user.otp_expires_at = None
         db.commit()
+        _otp_failures.pop(payload.email, None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="OTP expired",
         )
     if not verify_password(payload.otp, user.otp_code):
+        _otp_failures[payload.email] = _otp_failures.get(payload.email, 0) + 1
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid OTP",
@@ -117,6 +132,7 @@ def verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)) -> Logi
     user.otp_code = None
     user.otp_expires_at = None
     db.commit()
+    _otp_failures.pop(payload.email, None)
 
     token, _, _ = create_access_token(user.id, user.role)
     return LoginResponse(
