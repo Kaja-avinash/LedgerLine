@@ -2,201 +2,210 @@
 
 **Money movement with a ledger you can prove.**
 
-LedgerLine is a secure financial transaction management platform built for an
-individual engineering assessment (Snovasys). It enables administrators and
-account holders to manage accounts, perform deposits, withdrawals and internal
-transfers while preserving monetary conservation, atomic transaction processing,
-idempotency, concurrency safety, account-level authorization and an
-independently traceable financial ledger.
+LedgerLine is an enterprise-grade financial transaction management platform built for institutional-grade reliability, concurrency safety, and auditable monetary conservation. It enables administrators, account holders, and compliance auditors to execute deposits, withdrawals, and internal transfers while enforcing double-entry conservation, atomic transaction processing, exact-once idempotency, deterministic row-level concurrency locking, role-based authorization, and an independently verifiable financial ledger.
 
 - **Industry domain:** FinTech
-- **Primary technical domain:** Backend systems engineering
-- **Specializations:** Cybersecurity, database engineering, distributed systems,
-  financial transaction processing, accounting/ledger systems, API engineering,
-  application security
+- **Primary technical domain:** Backend systems engineering & Enterprise Web Application
+- **Specializations:** Cybersecurity, database engineering, distributed systems, financial transaction processing, double-entry accounting/ledger systems, API engineering, real-time analytics UI.
 
-## Implemented Features
+---
 
-- Authentication with three roles: Administrator, Account Holder, Auditor.
-- JWT (PyJWT) with Argon2 (pwdlib) password hashing and token revocation.
-- Role-based and resource-level authorization (defense-in-depth).
-- Account creation, listing (permission-scoped), details, balances.
-- Simulated deposits and withdrawals, internal transfers.
-- Double-entry ledger with balanced postings (debits = credits).
-- Integer paise (BIGINT) monetary values — no floating point.
-- Atomic early idempotency claim with SHA-256 request fingerprints.
-- Deterministic global account locking (`SELECT ... FOR UPDATE` in UUID order).
-- Per-account monotonic activity sequence for statements.
-- Refused-operation audit with observed balances.
-- Full transaction reversals (admin-only, reason required, balance checks).
-- Append-only ledger/audit tables enforced by PostgreSQL triggers.
-- Deferred constraint triggers (transaction closure, balance equality,
-  idempotency terminal state).
-- Read-only 4-way reconciliation engine.
-- Admin audit events and security audit separation.
-- Automated tests: conservation, concurrency, idempotency, authorization,
-  ledger integrity, DB trigger enforcement.
+## Architecture & Technology Stack
 
-## Tech Stack
+| Layer | Technology | Description |
+|---|---|---|
+| **Backend** | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2.x (Synchronous), Alembic | High-performance synchronous REST API with strict domain separation and data contracts |
+| **DB Driver** | `psycopg` 3 (Synchronous) | Native PostgreSQL driver executed in FastAPI threadpool |
+| **Database** | PostgreSQL 15+ (developed & verified on 18.6) | Real relational database with DDL triggers, table-level constraints, and privilege separation |
+| **Auth** | PyJWT, `pwdlib[argon2]` | Argon2id password hashing, two-step OTP verification, JWT access tokens with database revocation |
+| **Frontend** | React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons | Tier-one dark-mode enterprise dashboard, interactive SVG balance trend charts, telemetry tickers, and export tools |
+| **Testing** | pytest, pytest-asyncio, HTTPX, real PostgreSQL | 54 integration, concurrency, and trigger tests (never SQLite) |
 
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.13, FastAPI, Pydantic v2, SQLAlchemy 2.x (sync), Alembic |
-| DB driver | psycopg 3 (synchronous) |
-| Database | PostgreSQL 15+ (developed/tested on 18.6) |
-| Auth | PyJWT, pwdlib (Argon2) |
-| Frontend (planned) | React 18, TypeScript, Vite, Tailwind CSS |
-| Testing | pytest, pytest-asyncio, HTTPX, real PostgreSQL |
+---
 
-## Architecture Overview
+## Core Financial & Security Invariants
+
+1. **Integer Money Only (`BIGINT`):** All monetary values are denominated exclusively in integer paise (1 INR = 100 paise) and stored as PostgreSQL `BIGINT`. Floating-point math is completely eliminated across the platform.
+2. **Double-Entry Balance Conservation:** For every completed transaction:
+   $$\sum \text{Debits} = \sum \text{Credits}$$
+   Transactions require a minimum of 2 postings. External funds are balanced against dedicated system clearing accounts (`SYSTEM_CLEARING_DEPOSIT` and `SYSTEM_CLEARING_WITHDRAWAL`).
+3. **Deterministic Row-Level Concurrency Locking:** Racing transactions identify affected account UUIDs, deduplicate, and sort ascending before acquiring `SELECT ... FOR UPDATE` locks with a bounded 5s timeout (`SET LOCAL lock_timeout = '5s'`). This eliminates application-level deadlocks and guarantees zero overdrafts under concurrent requests.
+4. **Exact-Once Idempotency Engine:** Client requests supply an `Idempotency-Key` header. Requests are claimed atomically via `INSERT ... ON CONFLICT DO NOTHING`. A SHA-256 canonical hash of the request prevents payload tampering. Identical replays return cached responses with identical status codes without re-executing transactions.
+5. **Append-Only Tamper Resistance:** PostgreSQL triggers block any `UPDATE` or `DELETE` operations on `ledger_entries`, `refused_operations`, `admin_audit_events`, and finalized `idempotency_records`. Transaction headers transition strictly `FALSE -> TRUE` and cannot be reopened.
+6. **Role-Based Access Control (RBAC):**
+   - **Administrator:** Account creation, freeze/unfreeze, system ledger inspection, 4-way reconciliation reporting, and compensating reversals with mandatory reason narratives.
+   - **Account Holder:** Access restricted to owned accounts, balances, chronological statements, simulated deposits/withdrawals, and transfers.
+   - **Auditor:** Read-only access across system-wide ledger entries, audit trails, and reconciliation summaries. State mutation attempts are blocked with HTTP 403 Forbidden.
+
+---
+
+## Repository Structure
 
 ```
-backend/
-  app/
-    api/        # routers: auth, users, accounts, transactions, audit
-    core/       # config, security, database, deps
-    models/     # SQLAlchemy ORM (8 core tables)
-    schemas/    # Pydantic v2 request/response
-    services/   # FinancialService, ReconciliationService
-  alembic/     # migrations + triggers
-  tests/       # pytest (real PostgreSQL)
-frontend/      # (planned)
-docs/          # database_setup.sql
-reference/     # architecture reference (read-only)
+LedgerLine/
+├── backend/
+│   ├── alembic/            # Migrations & PostgreSQL trigger definitions
+│   ├── app/
+│   │   ├── api/            # API routers (auth, users, accounts, transactions, audit)
+│   │   ├── core/           # Config, security, database session, email/SMTP, dependencies
+│   │   ├── models/         # SQLAlchemy ORM models (8 core financial & audit tables)
+│   │   ├── repositories/   # Database access helpers
+│   │   ├── schemas/        # Pydantic v2 request/response schemas
+│   │   └── services/       # FinancialService, IdempotencyService, ReconciliationService
+│   └── tests/              # Pytest integration, concurrency, and trigger test suites
+├── frontend/
+│   ├── src/
+│   │   ├── api/            # Axios API client & typed endpoints
+│   │   ├── components/     # Layout, UI library (Card, Button, Modal, Badge), charts
+│   │   ├── context/        # AuthContext, ToastContext
+│   │   └── pages/          # Dashboard, AdminPanel, Audit, Login, Register
+│   ├── package.json
+│   ├── tailwind.config.js
+│   └── vite.config.ts
+├── docs/                   # database_setup.sql, API & architecture docs
+├── AGENTS.md               # Master architectural instructions & rules
+├── README.md               # Project overview & run instructions
+├── THREATS.md              # Threat register & concurrency trade-off analysis
+├── PROMPTS.md              # Chronological AI prompt log & human corrections
+└── .gitignore
 ```
 
-Financial invariants are enforced at **both** application and database level
-(deferred constraint triggers, append-only triggers, row-level locks).
+---
 
-## Setup
+## Quick Start & Setup Guide
 
 ### Prerequisites
-
-- Python 3.13+
-- PostgreSQL 15+ (local or managed)
+- Python 3.13+ (in a dedicated virtual environment `.venv`)
+- Node.js 18+ and npm
+- PostgreSQL 15+ (tested on PostgreSQL 18.6)
 - Git
 
-### 1. Clone
+---
+
+### 1. Database Initialization
+
+Execute the database provisioning script as a PostgreSQL superuser (e.g., `postgres`):
 
 ```bash
-git clone https://github.com/Kaja-avinash/LedgerLine.git
-cd LedgerLine
+psql -U postgres -f docs/database_setup.sql
 ```
 
-### 2. Python environment
+This creates:
+- Database: `ledgerline_dev`
+- Role `ledgerline_migrator`: Schema owner for running Alembic migrations (DDL)
+- Role `ledgerline_app`: Restricted runtime role for FastAPI (DML only, no schema modification rights)
+
+---
+
+### 2. Backend Setup
+
+1. Create and activate a Python 3.13 virtual environment:
+   ```bash
+   python -m venv .venv
+   # Windows PowerShell:
+   .\.venv\Scripts\Activate.ps1
+   # macOS/Linux:
+   source .venv/bin/activate
+   ```
+
+2. Install backend dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Configure environment variables:
+   Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   Ensure `DATABASE_URL_MIGRATOR`, `DATABASE_URL_APP`, and `JWT_SECRET_KEY` are configured.
+
+4. Apply database migrations and trigger functions:
+   ```bash
+   cd backend
+   alembic upgrade head
+   ```
+
+5. Launch the FastAPI server:
+   ```bash
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   ```
+   - Healthcheck: `GET http://localhost:8000/health`
+   - Interactive Swagger API Documentation: `http://localhost:8000/docs`
+
+---
+
+### 3. Frontend Setup
+
+1. Open a new terminal and navigate to `frontend`:
+   ```bash
+   cd frontend
+   npm install
+   ```
+
+2. Start the Vite development server:
+   ```bash
+   npm run dev
+   ```
+   The UI will be available at: `http://localhost:5173`
+
+---
+
+## Demo Credentials & Seed Accounts
+
+The development environment is pre-seeded with clean, reconciled accounts for each role:
+
+| Role | Email | Password | Account Number | Initial Balance | Capabilities |
+|---|---|---|---|---|---|
+| **Administrator** | `iamkarao@gmail.com` | `Admin@1234` | N/A (Admin) | N/A | Full ledger inspection, user management, account freeze/unfreeze, 4-way reconciliation, compensating reversals |
+| **Account Holder** | `avinashkaja280@gmail.com` | `User@1234` | `ACC-AVINASH01` | ₹0.00 | Simulated deposits, withdrawals, internal transfers, chronological statement export, idempotency inspector |
+| **Auditor** | Register / seed with role `AUDITOR` | Password123! | N/A | N/A | Read-only ledger view, audit trail inspection, reconciliation reporting |
+
+*Note: In development mode, OTP codes are logged directly to the backend terminal if live SMTP is not active.*
+
+---
+
+## Running the Automated Test Suite
+
+LedgerLine runs all concurrency, idempotency, and financial integrity tests against **real PostgreSQL** (never SQLite).
 
 ```bash
-python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
+# Run the complete test suite (54 tests):
+pytest backend/tests -v
 ```
 
-### 3. Database setup
-
-Run as a PostgreSQL superuser (e.g. `postgres`) the script
-`docs/database_setup.sql` after replacing the placeholder passwords. It creates:
-
-- Database `ledgerline_dev`
-- Role `ledgerline_migrator` (schema owner)
-- Role `ledgerline_app` (restricted runtime)
-
-Then copy `.env.example` to `.env` and fill in real values:
-
+### Specific Test Modules:
 ```bash
-cp .env.example .env
+# Concurrency stress tests & overdraft racing:
+pytest backend/tests/test_financial_service.py -v
+
+# Database triggers & append-only immutability tests:
+pytest backend/tests/test_db_triggers.py -v
+
+# Idempotency replay & financial API endpoints:
+pytest backend/tests/test_api_financial.py -v
+
+# RBAC, statements, and 4-way reconciliation:
+pytest backend/tests/test_api_audit.py -v
+
+# Argon2 password hashing, OTP, and token revocation:
+pytest backend/tests/test_api_auth.py -v
 ```
 
-Required variables: `DATABASE_URL_MIGRATOR`, `DATABASE_URL_APP` (or the
-`DB_*` component variables), `JWT_SECRET_KEY`.
+---
 
-### 4. Migrations
+## Frontend Highlights & Visual Analytics
 
-```bash
-cd backend
-alembic upgrade head
-```
+- **Immersive Dark Theme:** Deep midnight aesthetic (`bg-slate-950`) designed to enterprise fin-tech standards.
+- **Interactive Balance Analytics:** Dynamic SVG trend chart with interactive time-range filter toggles (`7D`, `30D`, `90D`, `ALL`).
+- **Cash Flow Ratio Indicator:** Visual ratio progress bar comparing total credits (inflows) against debits (outflows).
+- **Idempotency Inspector Modal:** Transparent verification tool displaying client idempotency keys, fingerprints, and cached execution states.
+- **Account Freeze / Unfreeze Modals:** Administrative confirmation modals for freezing and unfreezing customer accounts.
+- **Statement Export:** Real-time CSV export and print-ready formal bank statement views with activity sequences.
+- **Toast Notification System:** Animated slide-in toasts for feedback across all authentication and transaction operations.
 
-### 5. Run the backend
-
-```bash
-cd backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Health check: `GET http://localhost:8000/health`
-
-Interactive API docs: `http://localhost:8000/docs`
-
-## Running Tests
-
-Tests run against a **real PostgreSQL** instance (not SQLite).
-
-```bash
-cd backend
-pytest -q
-```
-
-Run a specific suite:
-
-```bash
-pytest tests/test_db_triggers.py -v
-pytest tests/test_financial_service.py -v
-pytest tests/test_api_financial.py -v
-pytest tests/test_api_audit.py -v
-```
-
-## API Documentation (summary)
-
-| Method | Route | Auth | Description |
-|---|---|---|---|
-| POST | /api/auth/register | public | Register account holder |
-| POST | /api/auth/login | public | Obtain JWT |
-| POST | /api/auth/logout | bearer | Revoke token |
-| GET | /api/auth/me | bearer | Current user |
-| POST | /api/users | admin | Create user |
-| GET | /api/users | admin | List users |
-| GET/PATCH | /api/users/{id} | admin/self | Get/update user |
-| GET | /api/accounts | bearer | List accounts (scoped) |
-| GET | /api/accounts/{id} | bearer | Account details |
-| POST | /api/accounts | admin | Create account |
-| POST | /api/accounts/{id}/freeze | admin | Freeze account |
-| POST | /api/accounts/{id}/unfreeze | admin | Unfreeze account |
-| GET | /api/accounts/{id}/statement | bearer | Per-account statement |
-| POST | /api/transactions/deposit | holder | Simulated deposit (Idempotency-Key) |
-| POST | /api/transactions/withdraw | holder | Simulated withdrawal (Idempotency-Key) |
-| POST | /api/transactions/transfer | holder | Internal transfer (Idempotency-Key) |
-| POST | /api/transactions/{id}/reverse | admin | Full reversal (Idempotency-Key) |
-| GET | /api/audit/events | admin/auditor | Admin audit events |
-| GET | /api/audit/clearing-balances | admin/auditor | System clearing balances |
-| GET | /api/audit/reconciliation | admin/auditor | Read-only reconciliation report |
-
-All money-moving requests require an `Idempotency-Key` header.
-
-## Security Highlights
-
-- Argon2 password hashing, JWT with expiry and revocation table.
-- Defense-in-depth authorization (router + service layer).
-- Account ownership verified on every request; no IDOR.
-- Deterministic row-level locking prevents concurrent overdrafts/deadlocks.
-- Append-only ledger/audit tables enforced by PostgreSQL triggers.
-- Restricted runtime DB role cannot alter schema or historical records.
-
-## Known Limitations
-
-- Frontend (React dashboards) not yet built.
-- Deployment not yet performed.
-- Only INR supported; no external payment gateway (simulated).
-- Full reversals only (no partial reversals).
-
-## Implementation Status
-
-Milestones 1–4 complete (foundation, schema/triggers, auth, financial engine,
-API routes, audit/reporting). Frontend and deployment pending.
+---
 
 ## License
 
-Individual assessment project — not licensed for redistribution.
+Built for individual engineering assessment (Snovasys). Private repository.

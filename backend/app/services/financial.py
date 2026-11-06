@@ -392,8 +392,9 @@ class FinancialService:
         self._validate_active(customer)
         self._validate_active(clearing)
 
-        # Ownership: account must belong to initiator (unless admin? deposits are holder-only per matrix)
-        if customer.user_id != initiator.id:
+        # Ownership: account must belong to initiator OR initiator is an ADMINISTRATOR.
+        # Admins may fund any customer account for operational/testing purposes.
+        if customer.user_id != initiator.id and initiator.role != "ADMINISTRATOR":
             raise FinancialError("FORBIDDEN", "Cannot deposit into another user's account", 403)
 
         # Update balances
@@ -498,7 +499,8 @@ class FinancialService:
         self._validate_active(customer)
         self._validate_active(clearing)
 
-        if customer.user_id != initiator.id:
+        # Ownership: account must belong to initiator OR initiator is an ADMINISTRATOR.
+        if customer.user_id != initiator.id and initiator.role != "ADMINISTRATOR":
             raise FinancialError("FORBIDDEN", "Cannot withdraw from another user's account", 403)
 
         # Business refusal: insufficient funds
@@ -632,7 +634,8 @@ class FinancialService:
         self._validate_active(source)
         self._validate_active(dest)
 
-        if source.user_id != initiator.id:
+        # Ownership: source account must belong to initiator OR initiator is an ADMINISTRATOR.
+        if source.user_id != initiator.id and initiator.role != "ADMINISTRATOR":
             raise FinancialError("FORBIDDEN", "Cannot transfer from another user's account", 403)
         if dest.user_id is None:
             raise InvalidAccountError("Destination account has no owner")

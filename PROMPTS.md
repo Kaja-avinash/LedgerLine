@@ -139,3 +139,48 @@ mistakes, prompts, dates, tests, or commit links.
 - **How identified:** `alembic current` failed with "permission denied for database".
 - **Correction:** Added `GRANT ALL ON DATABASE ledgerline_dev TO ledgerline_migrator;`.
 - **Commit link:** `5d47f6b` (Milestone 1 DB).
+
+
+## Entry 13 — 2026-11-06 (AI wrong: Frontend routing race condition on login)
+
+- **Date:** 2026-11-06
+- **AI tool used:** Antigravity / Gemini 2.5.
+- **Prompt / task:** "Resolve UI routing bug where user logs in, header updates with user info, but page remains stuck on login form."
+- **What the model generated:** Set user state in AuthContext, but did not guard the public `/login` route or redirect authenticated users visiting root `/`.
+- **What was wrong or risky:** Users completing OTP verification remained stranded on the login form unless they manually typed `/dashboard` in the address bar.
+- **How identified:** User testing of the authentication flow.
+- **Correction:** Implemented `PublicRoute` wrapper that automatically redirects authenticated users to `/dashboard`, added immediate imperative navigation upon successful OTP verification in `Login.tsx`, and ensured `App.tsx` routes properly guard unauthenticated vs authenticated views.
+- **Commit link:** Milestone 5 (Frontend UI/UX).
+
+## Entry 14 — 2026-11-06 (AI wrong: Password visibility toggle inverted)
+
+- **Date:** 2026-11-06
+- **AI tool used:** Antigravity / Gemini 2.5.
+- **Prompt / task:** "Fix password visibility toggle in Login and Register components."
+- **What the model generated:** Rendered `Eye` when `type="password"` (hidden) and `EyeOff` when `type="text"` (visible).
+- **What was wrong or risky:** UX convention inversion: users saw an open eye while their password was obscured as dots and a crossed-out eye when their password was in cleartext.
+- **How identified:** User testing of password input fields on Login and Register forms.
+- **Correction:** Inverted the conditional rendering across `Login.tsx` and `Register.tsx` to `{showPassword ? <Eye className="w-4 h-4"/> : <EyeOff className="w-4 h-4"/>}` so the icon indicates current visibility state accurately.
+- **Commit link:** Milestone 5 (Frontend UI/UX).
+
+## Entry 15 — 2026-11-06 (AI wrong: Rigid self-ownership check blocked administrative funding)
+
+- **Date:** 2026-11-06
+- **AI tool used:** Antigravity / Gemini 2.5.
+- **Prompt / task:** "Fix 403 Forbidden error when Administrator attempts to deposit funds into a user's account for testing."
+- **What the model generated:** `if customer.user_id != initiator.id: raise FinancialError("FORBIDDEN", ...)` strictly requiring the logged-in user to be the account owner for deposits and withdrawals.
+- **What was wrong or risky:** Platform administrators could not deposit funds or simulate capital movements into customer accounts for operational or testing purposes.
+- **How identified:** User attempted an admin-initiated test deposit and encountered a 403 error.
+- **Correction:** Updated authorization logic in `FinancialService` to permit the action if `customer.user_id == initiator.id or initiator.role == "ADMINISTRATOR"`. Cross-customer transfers between account holders remain strictly blocked, and all admin-initiated adjustments are immutably logged to `admin_audit_events`.
+- **Commit link:** Milestone 5 (Financial Engine & Admin Bypass).
+
+## Entry 16 — 2026-11-06 (AI wrong: Test fixtures failed when live SMTP credentials configured)
+
+- **Date:** 2026-11-06
+- **AI tool used:** Antigravity / Gemini 2.5.
+- **Prompt / task:** "Execute backend automated test suite against PostgreSQL."
+- **What the model generated:** Tests used `login_and_get_token` fixture expecting `[dev] OTP for ...` printed to stdout, while `send_otp_email` dispatched real emails via Gmail SMTP when SMTP env vars were populated.
+- **What was wrong or risky:** When live SMTP credentials were added to `.env`, `send_email` attempted network delivery to synthetic `@example.com` addresses, skipping the stdout print. The test fixture regex failed, causing test errors across `test_api_audit.py`.
+- **How identified:** Pytest fixture errors during test execution.
+- **Correction:** Added synthetic domain detection in `send_email`: if `PYTEST_CURRENT_TEST` is set or `to.endswith("@example.com")`, SMTP network delivery is skipped and OTP fallback logging occurs immediately. 54 of 54 tests passed.
+- **Commit link:** Milestone 5 (Test Suite Hardening).

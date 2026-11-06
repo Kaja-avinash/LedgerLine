@@ -8,15 +8,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
+BACKEND = ROOT / "backend"
 load_dotenv(ROOT / ".env", override=False)
+load_dotenv(BACKEND / ".env", override=False)
 
 
 def _smtp_config():
-    host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    host = os.getenv("SMTP_SERVER") or os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER", "")
+    user = os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER", "")
     password = os.getenv("SMTP_PASSWORD", "")
-    sender = os.getenv("SMTP_FROM", user or "noreply@ledgerline.local")
+    sender = os.getenv("MAIL_FROM") or os.getenv("SMTP_FROM", user or "noreply@ledgerline.local")
     return host, port, user, password, sender
 
 
@@ -25,6 +27,9 @@ def send_email(to: str, subject: str, body_text: str, body_html: str | None = No
 
     Never raises; failures are logged to stdout so registration/login still succeed.
     """
+    if os.getenv("PYTEST_CURRENT_TEST") or to.endswith("@example.com"):
+        return False
+
     host, port, user, password, sender = _smtp_config()
     if not user or not password:
         print(f"[email] SMTP not configured; skipping email to {to}: {subject}")

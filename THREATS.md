@@ -508,3 +508,30 @@ implementation and test evidence.
 - **Threat ID:** T-48
 - **Mitigation:** OTP cleared immediately on successful verification.
 - **Status:** Mitigated (implemented).
+
+
+---
+
+## Accepted Edge Cases & Concurrency Trade-Offs
+
+LedgerLine operates under explicit architectural trade-offs to balance absolute financial correctness, deterministic concurrency, and production availability. The following edge cases and design decisions are formally documented and justified:
+
+### 1. Pessimistic Row Locking vs. Optimistic Concurrency Control (OCC)
+- **Trade-off:** LedgerLine utilizes explicit pessimistic row-level locking (`SELECT ... FOR UPDATE` in ascending account UUID order) rather than Optimistic Concurrency Control (OCC via version columns).
+- **Justification:** In high-velocity financial environments (e.g., flash withdrawals or centralized clearing account movements), OCC suffers from severe abort-and-retry cascades, degrading throughput and consuming excessive connection pool capacity. Pessimistic locking deterministically serializes access to accounts, guarantees zero overdrafts, and completely eliminates application-level deadlocks.
+
+### 2. Bounded Lock Timeout (`SET LOCAL lock_timeout = '5s'`)
+- **Trade-off:** If an account row is held by a competing transaction and cannot be acquired within 5,000 milliseconds, PostgreSQL terminates the lock attempt with error code `55P03`.
+- **Justification:** Indefinite lock waiting invites thread starvation and connection pool exhaustion if a worker crashes or experiences network latency during a transaction. The 5s bounded timeout fails fast, logging the refusal and allowing safe client retry.
+
+### 3. Bounded In-Progress Idempotency Wait Window (1,000ms Polling)
+- **Trade-off:** When a duplicate request arrives while the original transaction is still `IN_PROGRESS`, the duplicate request polls for up to 1,000ms (at 50ms intervals) waiting for the original transaction to reach a terminal state (`COMPLETED` or `REFUSED`). If the competing transaction does not conclude within 1,000ms, the request returns HTTP 409 Conflict.
+- **Justification:** Avoids hanging client HTTP connections while preventing duplicate financial mutations. Clients can safely resend with the same key once the competing operation resolves.
+
+### 4. Administrative Operational Deposit Override with Immutable Audit Logging
+- **Trade-off:** Administrators are permitted to initiate simulated deposits and transfers on customer accounts for platform operations and testing.
+- **Justification:** To enable operational account funding and end-to-end testing, administrator privileges bypass strict self-ownership checks. However, to preserve total accountability, all administrative interventions are immutably captured in `admin_audit_events` and verified during read-only 4-way reconciliation audits.
+
+### 5. Single Full-Reversal Constraint (No Partial Reversals)
+- **Trade-off:** A transaction can only be reversed in full once (`uq_single_transaction_reversal` partial unique index). Partial compensating reversals are disallowed.
+- **Justification:** Partial reversals significantly complicate double-entry audit trails and introduce reconciliation ambiguities. Disallowing partial reversals guarantees that compensating ledger entries cleanly mirror the original transaction postings in reverse.
