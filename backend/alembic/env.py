@@ -39,6 +39,17 @@ if config.config_file_name is not None:
 from urllib.parse import quote_plus
 
 
+def _normalize_pg_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    url = url.strip()
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql://") and not url.startswith("postgresql+psycopg://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
 def _build_url(prefix: str) -> str | None:
     """Build a SQLAlchemy URL from DB_<prefix>_* components, or None if not configured."""
     user = os.getenv(f"DB_{prefix}_USER")
@@ -54,14 +65,26 @@ def _build_url(prefix: str) -> str | None:
     )
 
 
-MIGRATOR_DATABASE_URL = _build_url("MIGRATOR") or os.getenv("DATABASE_URL_MIGRATOR")
+_raw_migrator = (
+    _build_url("MIGRATOR")
+    or os.getenv("DATABASE_URL_MIGRATOR")
+    or os.getenv("DATABASE_URL")
+    or os.getenv("POSTGRES_URL")
+)
+MIGRATOR_DATABASE_URL = _normalize_pg_url(_raw_migrator)
 if not MIGRATOR_DATABASE_URL:
     raise RuntimeError(
         "Migrator database not configured. Set either DB_MIGRATOR_USER + "
-        "DB_MIGRATOR_PASSWORD (recommended) or DATABASE_URL_MIGRATOR in .env."
+        "DB_MIGRATOR_PASSWORD (recommended), DATABASE_URL_MIGRATOR, or DATABASE_URL in .env."
     )
 
-APP_DATABASE_URL = _build_url("APP") or os.getenv("DATABASE_URL_APP")
+_raw_app = (
+    _build_url("APP")
+    or os.getenv("DATABASE_URL_APP")
+    or os.getenv("DATABASE_URL")
+    or os.getenv("POSTGRES_URL")
+)
+APP_DATABASE_URL = _normalize_pg_url(_raw_app)
 
 # Inject the resolved URL into the Alembic config so offline/online modes use it.
 # (Avoid set_main_option: configparser would choke on '%' in URL-encoded passwords.)

@@ -151,6 +151,36 @@ This creates:
 
 ---
 
+## Cloud Deployment (Vercel & Serverless PostgreSQL)
+
+LedgerLine is configured for 100% free, production-ready cloud deployment hosting **both** the FastAPI backend and React frontend together on **Vercel**, backed by a permanent cloud PostgreSQL database (such as **Neon**, **Supabase**, or **Aiven**).
+
+### 1. Architectural Highlights
+- **Unified Domain Hosting:** Handled via [`vercel.json`](file:///c:/Users/avina/Downloads/LedgerLine/vercel.json). Frontend routes fallback to `index.html` (SPA routing) while `/api/*`, `/docs`, `/openapi.json`, and `/health` route directly to the FastAPI serverless entry point ([`backend/app/main.py`](file:///c:/Users/avina/Downloads/LedgerLine/backend/app/main.py) / [`api/index.py`](file:///c:/Users/avina/Downloads/LedgerLine/api/index.py)).
+- **Universal Connection String Support:** Backend engine automatically parses standard `DATABASE_URL` and `POSTGRES_URL` variables from Neon/Supabase, normalizing connection schemes (`postgres://` / `postgresql://` $\rightarrow$ `postgresql+psycopg://`).
+- **Resilient Connection Pooling:** Database engine initializes with `pool_pre_ping=True`, preventing stale connections when serverless containers wake from idle.
+
+### 2. Cloud Database Provisioning (e.g. Neon or Supabase)
+1. Create a free PostgreSQL instance on [Neon](https://neon.tech) or [Supabase](https://supabase.com).
+2. Copy your connection URI (`postgres://...` or `postgresql://...`).
+3. Run Alembic migrations against your cloud database from your terminal:
+   ```bash
+   DATABASE_URL="your-cloud-database-url" alembic upgrade head
+   ```
+   *(This deploys all 8 tables and PostgreSQL constraint triggers `trg_verify_financial_transaction_closure`, `trg_protect_ledger_entries`, and `trg_verify_idempotency_terminal_state` to the cloud instance).*
+
+### 3. Deploying on Vercel
+1. Log in to [Vercel](https://vercel.com) and click **Add New Project**.
+2. Select and import your GitHub repository: `https://github.com/Kaja-avinash/LedgerLine`.
+3. In **Environment Variables**, add:
+   - `DATABASE_URL`: Your cloud PostgreSQL connection string.
+   - `SECRET_KEY` (or `JWT_SECRET_KEY`): A secure 64-character random string for signing JWT tokens.
+   - `APP_ENV`: `production`
+   - *(Optional)* `SMTP_SERVER`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`: For live email OTP dispatch.
+4. Click **Deploy**. Vercel will automatically compile the Vite frontend into `dist`, provision the serverless Python runtime, and host the platform on a live `.vercel.app` URL.
+
+---
+
 ## Demo Credentials & Seed Accounts
 
 The development environment is pre-seeded with clean, reconciled accounts for each role:
