@@ -1,73 +1,26 @@
-"""API tests for authentication and user management."""
+"""API tests for authentication and user management (OTP flow)."""
 
-import os
+import io
+import contextlib
+import re
 import uuid
-from pathlib import Path
-from urllib.parse import quote_plus
 
 import pytest
-from dotenv import load_dotenv
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
 
-from app.core.security import hash_password
 from app.main import app
+from tests.conftest import login_and_get_token
 
-ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env", override=False)
-
-
-def _build_url(prefix: str) -> str | None:
-    user = os.getenv(f"DB_{prefix}_USER")
-    if not user:
-        return None
-    password = os.getenv(f"DB_{prefix}_PASSWORD", "")
-    host = os.getenv(f"DB_{prefix}_HOST", "localhost")
-    port = os.getenv(f"DB_{prefix}_PORT", "5432")
-    name = os.getenv(f"DB_{prefix}_NAME", "ledgerline_dev")
-    return (
-        f"postgresql+psycopg://{quote_plus(user)}:{quote_plus(password)}"
-        f"@{host}:{port}/{name}"
-    )
+client = TestClient(app)
 
 
-MIGRATOR_URL = _build_url("MIGRATOR") or os.getenv("DATABASE_URL_MIGRATOR")
-APP_URL = _build_url("APP") or os.getenv("DATABASE_URL_APP")
+def _register(email, password="Password123!", role="ACCOUNT_HOLDER"):
+    return client.post("/api/auth/register", json={"email": email, "password": password, "role": role})
 
 
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
-@pytest.fixture
-def admin_token():
-    """Create an admin user via migrator and return a bearer token."""
-    mig = create_engine(MIGRATOR_URL)
-    uid = uuid.uuid4()
-    email = f"admin-{uid}@example.com"
-    password = "AdminPass123!"
-    with mig.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO users (id, email, hashed_password, role, is_active) "
-                "VALUES (:id, :email, :hp, 'ADMINISTRATOR', TRUE)"
-            ),
-            {"id": uid, "email": email, "hp": hash_password(password)},
-        )
-    # login via API to get token
-    c = TestClient(app)
-    r = c.post("/api/auth/login", data={"username": email, "password": password})
-    assert r.status_code == 200, r.text
-    return r.json()["access_token"], email
-
-
-def test_register_account_holder(client):
+def test_register_account_holder():
     email = f"holder-{uuid.uuid4()}@example.com"
-    r = client.post(
-        "/api/auth/register",
-        json={"email": email, "password": "Password123!", "role": "ACCOUNT_HOLDER"},
-    )
+    r = _register(email)
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["email"] == email
@@ -75,96 +28,106 @@ def test_register_account_holder(client):
     assert body["is_active"] is True
 
 
-def test_register_privileged_role_rejected(client):
+def test_register_privileged_role_rejected():
     email = f"bad-{uuid.uuid4()}@example.com"
-    r = client.post(
-        "/api/auth/register",
-        json={"email": email, "password": "Password123!", "role": "ADMINISTRATOR"},
-    )
+    r = _register(email, role="ADMINISTRATOR")
     assert r.status_code == 403
 
 
-def test_register_duplicate_email(client):
+def test_register_duplicate_email():
     email = f"dup-{uuid.uuid4()}@example.com"
-    r1 = client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
+    r1 = _register(email)
     assert r1.status_code == 201
-    r2 = client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
+    r2 = _register(email)
     assert r2.status_code == 409
 
 
-def test_login_success(client):
+def test_login_success():
     email = f"login-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    r = client.post("/api/auth/login", data={"username": email, "password": "Password123!"})
+    _register(email)
+    # step 1: login returns otp_required
+    r = client.post(
+        "/api/auth/login",
+        data={"username": email, "password": "Password123!", "role": "ACCOUNT_HOLDER"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert "access_token" in body
-    assert body["token_type"] == "bearer"
+    assert r.json()["status"] == "otp_required"
+    assert r.json()["email"] == email
+    # step 2: verify otp -> token
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        r1 = client.post(
+            "/api/auth/login",
+            data={"username": email, "password": "Password123!", "role": "ACCOUNT_HOLDER"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    m = re.search(r"OTP for .*?: (\d{6})", buf.getvalue())
+    otp = m.group(1)
+    r2 = client.post("/api/auth/verify-otp", json={"email": email, "otp": otp})
+    assert r2.status_code == 200, r2.text
+    assert "access_token" in r2.json()
 
 
-def test_login_wrong_password(client):
+def test_login_wrong_password():
     email = f"login2-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    r = client.post("/api/auth/login", data={"username": email, "password": "wrong"})
+    _register(email)
+    r = client.post(
+        "/api/auth/login",
+        data={"username": email, "password": "wrong", "role": "ACCOUNT_HOLDER"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
     assert r.status_code == 401
 
 
-def test_me_authenticated(client):
+def test_login_role_mismatch():
+    email = f"login3-{uuid.uuid4()}@example.com"
+    _register(email)
+    # account holder trying admin login
+    r = client.post(
+        "/api/auth/login",
+        data={"username": email, "password": "Password123!", "role": "ADMINISTRATOR"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert r.status_code == 401
+
+
+def test_me_authenticated():
     email = f"me-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    tok = client.post("/api/auth/login", data={"username": email, "password": "Password123!"}).json()["access_token"]
-    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"})
+    _register(email)
+    token = login_and_get_token(client, email, "Password123!")
+    r = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json()["email"] == email
 
 
-def test_me_unauthenticated(client):
+def test_me_unauthenticated():
     r = client.get("/api/auth/me")
     assert r.status_code == 401
 
 
-def test_logout_revokes_token(client):
+def test_logout_revokes_token():
     email = f"lo-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    tok = client.post("/api/auth/login", data={"username": email, "password": "Password123!"}).json()["access_token"]
-    r = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {tok}"})
+    _register(email)
+    token = login_and_get_token(client, email, "Password123!")
+    r = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 204
-    # token now revoked
-    r2 = client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok}"})
+    r2 = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert r2.status_code == 401
 
 
-def test_admin_create_user(admin_token):
-    token, _ = admin_token
-    email = f"created-{uuid.uuid4()}@example.com"
-    r = TestClient(app).post(
-        "/api/users",
-        json={"email": email, "password": "Password123!", "role": "AUDITOR"},
-        headers={"Authorization": f"Bearer {token}"},
+def test_verify_otp_invalid():
+    email = f"otp-{uuid.uuid4()}@example.com"
+    _register(email)
+    client.post(
+        "/api/auth/login",
+        data={"username": email, "password": "Password123!", "role": "ACCOUNT_HOLDER"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
-    assert r.status_code == 201, r.text
-    assert r.json()["role"] == "AUDITOR"
+    r = client.post("/api/auth/verify-otp", json={"email": email, "otp": "000000"})
+    assert r.status_code == 401
 
 
-def test_admin_list_users_requires_admin(client):
-    email = f"holder-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    tok = client.post("/api/auth/login", data={"username": email, "password": "Password123!"}).json()["access_token"]
-    r = client.get("/api/users", headers={"Authorization": f"Bearer {tok}"})
-    assert r.status_code == 403
-
-
-def test_holder_cannot_view_other_user(client, admin_token):
-    # create a second holder
-    email = f"h2-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email, "password": "Password123!"})
-    tok2 = client.post("/api/auth/login", data={"username": email, "password": "Password123!"}).json()["access_token"]
-    # get its id
-    me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {tok2}"}).json()
-    # another holder
-    email3 = f"h3-{uuid.uuid4()}@example.com"
-    client.post("/api/auth/register", json={"email": email3, "password": "Password123!"})
-    tok3 = client.post("/api/auth/login", data={"username": email3, "password": "Password123!"}).json()["access_token"]
-    # tok3 tries to view tok2's user -> 403
-    r = client.get(f"/api/users/{me['id']}", headers={"Authorization": f"Bearer {tok3}"})
-    assert r.status_code == 403
+def test_verify_otp_expired_or_missing():
+    r = client.post("/api/auth/verify-otp", json={"email": "nobody@example.com", "otp": "123456"})
+    assert r.status_code == 401

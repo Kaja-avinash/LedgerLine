@@ -16,6 +16,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="flex items-center gap-4">
           {user ? (
             <>
+              {user.role === 'ADMINISTRATOR' && (
+                <>
+                  <Link to="/admin" className="text-sm text-slate-600 hover:text-slate-900">Admin</Link>
+                  <Link to="/audit" className="text-sm text-slate-600 hover:text-slate-900">Audit</Link>
+                </>
+              )}
+              {user.role === 'AUDITOR' && (
+                <Link to="/audit" className="text-sm text-slate-600 hover:text-slate-900">Audit</Link>
+              )}
               <span className="text-sm text-slate-600">
                 {user.email} <span className="text-xs text-slate-400">({user.role})</span>
               </span>

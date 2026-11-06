@@ -1,24 +1,27 @@
 """Authentication routes."""
 
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.deps import get_current_user, oauth2_scheme
-from app.core.security import create_access_token, hash_password, verify_password
 from app.core.database import get_db
+from app.core.deps import get_current_user, oauth2_scheme
+from app.core.email import send_otp_email, send_welcome_email
+from app.core.security import create_access_token, hash_password, verify_password
 from app.models.revoked_token import RevokedToken
 from app.models.user import User
-from app.schemas.auth import LoginResponse, RegisterRequest
+from app.schemas.auth import LoginResponse, RegisterRequest, VerifyOtpRequest
 from app.schemas.user import UserResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 PUBLIC_REGISTRATION_ROLE = "ACCOUNT_HOLDER"
+OTP_EXPIRY_MINUTES = 5
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -45,14 +48,18 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Send welcome email (best-effort; never blocks registration).
+    send_welcome_email(user.email, user.email)
     return user
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login")
 def login(
     form: OAuth2PasswordRequestForm = Depends(),
+    role: str = Form("ACCOUNT_HOLDER"),
     db: Session = Depends(get_db),
-) -> LoginResponse:
+):
     user = db.query(User).filter(User.email == form.username).first()
     if user is None or not verify_password(form.password, user.hashed_password):
         raise HTTPException(
@@ -65,8 +72,53 @@ def login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is inactive",
         )
+    if user.role != role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Role mismatch: credentials do not match the requested role",
+        )
 
-    token, _, expires_at = create_access_token(user.id, user.role)
+    # Generate 6-digit OTP, hash and store with 5-minute expiry.
+    otp = f"{secrets.randbelow(1000000):06d}"
+    user.otp_code = hash_password(otp)
+    user.otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    db.commit()
+
+    sent = send_otp_email(user.email, otp)
+    if not sent:
+        print(f"[dev] OTP for {user.email}: {otp} (SMTP not configured)")
+
+    return {"status": "otp_required", "email": user.email}
+
+
+@router.post("/verify-otp", response_model=LoginResponse)
+def verify_otp(payload: VerifyOtpRequest, db: Session = Depends(get_db)) -> LoginResponse:
+    user = db.query(User).filter(User.email == payload.email).first()
+    if user is None or user.otp_code is None or user.otp_expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No pending OTP for this account",
+        )
+    if datetime.now(timezone.utc) > user.otp_expires_at:
+        user.otp_code = None
+        user.otp_expires_at = None
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="OTP expired",
+        )
+    if not verify_password(payload.otp, user.otp_code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid OTP",
+        )
+
+    # Clear OTP
+    user.otp_code = None
+    user.otp_expires_at = None
+    db.commit()
+
+    token, _, _ = create_access_token(user.id, user.role)
     return LoginResponse(
         access_token=token,
         token_type="bearer",
@@ -80,7 +132,6 @@ def logout(
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme),
 ) -> None:
-    # Decode to obtain jti and exp for revocation record.
     from app.core.security import decode_access_token
 
     payload = decode_access_token(token)
@@ -88,7 +139,6 @@ def logout(
     exp = payload["exp"]
     expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
 
-    # Avoid duplicate revocation entries.
     existing = db.query(RevokedToken).filter(RevokedToken.token_jti == jti).first()
     if existing is None:
         db.add(

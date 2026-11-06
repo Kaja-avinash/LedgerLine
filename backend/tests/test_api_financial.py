@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.security import hash_password
 from app.main import app
+from tests.conftest import login_and_get_token
 from app.models.user import User
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -111,7 +112,7 @@ def holder():
     uid, email, pw = _create_user(f"h-{uuid.uuid4()}@example.com", "ACCOUNT_HOLDER")
     aid = _create_account(uid, balance=50000)
     c = TestClient(app)
-    tok = c.post("/api/auth/login", data={"username": email, "password": pw}).json()["access_token"]
+    tok = login_and_get_token(c, email, pw)
     return {"id": uid, "email": email, "password": pw, "account_id": aid, "token": tok}
 
 
@@ -121,7 +122,7 @@ def holder2():
     uid, email, pw = _create_user(f"h2-{uuid.uuid4()}@example.com", "ACCOUNT_HOLDER")
     aid = _create_account(uid, balance=10000)
     c = TestClient(app)
-    tok = c.post("/api/auth/login", data={"username": email, "password": pw}).json()["access_token"]
+    tok = login_and_get_token(c, email, pw)
     return {"id": uid, "email": email, "password": pw, "account_id": aid, "token": tok}
 
 
@@ -130,7 +131,7 @@ def auditor():
     _ensure_system_accounts()
     uid, email, pw = _create_user(f"aud-{uuid.uuid4()}@example.com", "AUDITOR")
     c = TestClient(app)
-    tok = c.post("/api/auth/login", data={"username": email, "password": pw}).json()["access_token"]
+    tok = login_and_get_token(c, email, pw, role="AUDITOR")
     return {"id": uid, "email": email, "password": pw, "token": tok}
 
 

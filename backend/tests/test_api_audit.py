@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 
 from app.core.security import hash_password
 from app.main import app
+from tests.conftest import login_and_get_token
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env", override=False)
@@ -48,10 +49,6 @@ def _create_user(email, role, password="Password123!"):
     return uid, email, password
 
 
-def _login(client, email, password):
-    return client.post("/api/auth/login", data={"username": email, "password": password}).json()["access_token"]
-
-
 @pytest.fixture(scope="module", autouse=True)
 def _clean():
     mig = create_engine(MIGRATOR_URL)
@@ -86,7 +83,7 @@ def client():
 def admin():
     uid, email, pw = _create_user(f"admin-{uuid.uuid4()}@example.com", "ADMINISTRATOR")
     c = TestClient(app)
-    tok = _login(c, email, pw)
+    tok = login_and_get_token(c, email, pw, role="ADMINISTRATOR")
     return {"id": uid, "email": email, "token": tok}
 
 
@@ -94,7 +91,7 @@ def admin():
 def auditor():
     uid, email, pw = _create_user(f"aud-{uuid.uuid4()}@example.com", "AUDITOR")
     c = TestClient(app)
-    tok = _login(c, email, pw)
+    tok = login_and_get_token(c, email, pw, role="AUDITOR")
     return {"id": uid, "email": email, "token": tok}
 
 
@@ -113,7 +110,7 @@ def holder():
             {"id": aid, "num": f"ACC-{aid.hex[:8]}", "uid": uid},
         )
     c = TestClient(app)
-    tok = _login(c, email, pw)
+    tok = login_and_get_token(c, email, pw)
     return {"id": uid, "email": email, "token": tok, "account_id": aid}
 
 

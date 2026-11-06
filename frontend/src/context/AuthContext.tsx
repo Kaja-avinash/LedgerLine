@@ -24,6 +24,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
+  completeLogin: (accessToken: string) => void;
   logout: () => void;
 }
 
@@ -71,6 +72,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       new URLSearchParams({ username: email, password }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
     );
+    if (res.data.status === 'otp_required') {
+      throw new Error('OTP_REQUIRED');
+    }
     const accessToken = res.data.access_token as string;
     localStorage.setItem(TOKEN_KEY, accessToken);
     setAuthToken(accessToken);
@@ -93,9 +97,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const completeLogin = useCallback((accessToken: string) => {
+    localStorage.setItem(TOKEN_KEY, accessToken);
+    setAuthToken(accessToken);
+    setToken(accessToken);
+  }, []);
+
   const value = useMemo(
-    () => ({ user, token, loading, login, register, logout }),
-    [user, token, loading, login, register, logout],
+    () => ({ user, token, loading, login, register, completeLogin, logout }),
+    [user, token, loading, login, register, completeLogin, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

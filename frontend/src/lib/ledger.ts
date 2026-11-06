@@ -29,6 +29,44 @@ export interface Statement {
   items: StatementItem[];
 }
 
+export interface AuditUser {
+  id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export async function fetchUsers(): Promise<AuditUser[]> {
+  const res = await api.get('/api/users');
+  return res.data;
+}
+
+export async function fetchAllAccounts(): Promise<Account[]> {
+  const res = await api.get('/api/accounts');
+  return res.data;
+}
+
+export async function fetchReconciliation() {
+  const res = await api.get('/api/audit/reconciliation');
+  return res.data as { status: string; issue_count: number; issues: string[]; accounts_checked: number; transactions_checked: number };
+}
+
+export async function fetchClearingBalances() {
+  const res = await api.get('/api/audit/clearing-balances');
+  return res.data as { account_id: string; account_type: string; balance_paise: number }[];
+}
+
+export async function freezeAccount(accountId: string) {
+  const res = await api.post(`/api/accounts/${accountId}/freeze`);
+  return res.data;
+}
+
+export async function unfreezeAccount(accountId: string) {
+  const res = await api.post(`/api/accounts/${accountId}/unfreeze`);
+  return res.data;
+}
+
 export async function fetchAccounts(): Promise<Account[]> {
   const res = await api.get('/api/accounts');
   return res.data;

@@ -4,12 +4,9 @@ import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
-
 import Dashboard from './pages/Dashboard';
-
-function Home() {
-  return <Dashboard />;
-}
+import AdminPanel from './pages/AdminPanel';
+import AuditPage from './pages/Audit';
 
 function App() {
   return (
@@ -23,7 +20,23 @@ function App() {
               path="/"
               element={
                 <ProtectedRoute>
-                  <Home />
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute roles={['ADMINISTRATOR']}>
+                  <AdminPanel />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/audit"
+              element={
+                <ProtectedRoute roles={['ADMINISTRATOR', 'AUDITOR']}>
+                  <AuditPage />
                 </ProtectedRoute>
               }
             />

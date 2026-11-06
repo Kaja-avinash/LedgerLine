@@ -16,6 +16,11 @@ class LoginResponse(BaseModel):
     expires_in: int
 
 
+class VerifyOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+
 class TokenPayload(BaseModel):
     sub: str
     role: str
