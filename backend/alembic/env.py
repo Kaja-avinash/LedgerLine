@@ -69,9 +69,9 @@ APP_DATABASE_URL = _build_url("APP") or os.getenv("DATABASE_URL_APP")
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from backend.app.models import Base  # noqa: E402
-# target_metadata = Base.metadata
-target_metadata = None
+from app.models import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
