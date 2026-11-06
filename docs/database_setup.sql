@@ -21,7 +21,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ledgerline_migrator') THEN
         CREATE ROLE ledgerline_migrator WITH
             LOGIN
-            PASSWORD 'Avinash@55'
+            PASSWORD '<MIGRATOR_PASSWORD_HERE>'
             NOSUPERUSER
             NOCREATEDB
             NOCREATEROLE
@@ -31,7 +31,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ledgerline_app') THEN
         CREATE ROLE ledgerline_app WITH
             LOGIN
-            PASSWORD 'Avinash@542005'
+            PASSWORD '<APP_PASSWORD_HERE>'
             NOSUPERUSER
             NOCREATEDB
             NOCREATEROLE
