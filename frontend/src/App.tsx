@@ -1,20 +1,14 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from './context/AuthContext';
+import { AuthProvider } from './context/AuthContext';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
 
+import Dashboard from './pages/Dashboard';
+
 function Home() {
-  const { user } = useAuth();
-  return (
-    <div>
-      <h1 className="text-2xl font-semibold mb-2">Dashboard</h1>
-      <p className="text-slate-600">
-        Welcome{user ? `, ${user.email}` : ''}. Use the navigation to manage accounts and transactions.
-      </p>
-    </div>
-  );
+  return <Dashboard />;
 }
 
 function App() {
