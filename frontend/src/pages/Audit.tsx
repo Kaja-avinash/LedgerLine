@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
+import { RefreshCw, CheckCircle2, XCircle } from 'lucide-react';
 import { fetchReconciliation, fetchClearingBalances } from '../lib/ledger';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Alert } from '../components/ui/Alert';
 
 export default function AuditPage() {
   const [recon, setRecon] = useState<any>(null);
@@ -25,72 +30,101 @@ export default function AuditPage() {
     load();
   }, []);
 
-  if (loading) return <div className="text-slate-500">Loading audit data...</div>;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-muted">
+        <span className="animate-spin-slow inline-block w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full mr-2" />
+        Loading audit data...
+      </div>
+    );
+  }
+
+  const ok = recon?.status === 'ok';
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">System Audit & Reconciliation</h1>
-        <button onClick={load} className="text-sm text-indigo-600 hover:underline">
-          Refresh
-        </button>
+        <Button variant="secondary" onClick={load}>
+          <RefreshCw className="w-4 h-4" /> Refresh
+        </Button>
       </div>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
+      {error && <Alert kind="error">{error}</Alert>}
 
       {recon && (
         <div
-          className={`rounded-lg shadow p-5 ${
-            recon.status === 'ok' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+          className={`rounded-2xl border p-6 ${
+            ok ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
           }`}
         >
-          <div className="flex items-center gap-2 mb-2">
-            <span className={`text-lg font-semibold ${recon.status === 'ok' ? 'text-green-700' : 'text-red-700'}`}>
-              {recon.status === 'ok' ? '✓ Reconciliation OK' : '✗ Issues Found'}
+          <div className="flex items-center gap-2 mb-3">
+            {ok ? <CheckCircle2 className="w-6 h-6 text-emerald-600" /> : <XCircle className="w-6 h-6 text-rose-600" />}
+            <span className={`text-xl font-semibold ${ok ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {ok ? 'Reconciliation OK' : 'Issues Found'}
             </span>
+            <Badge tone={ok ? 'success' : 'danger'}>{ok ? 'HEALTHY' : 'ALERT'}</Badge>
           </div>
-          <div className="text-sm text-slate-700 space-y-1">
-            <div>Accounts checked: {recon.accounts_checked}</div>
-            <div>Transactions checked: {recon.transactions_checked}</div>
-            <div>Issue count: {recon.issue_count}</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-muted">Accounts checked</div>
+              <div className="text-lg font-semibold">{recon.accounts_checked}</div>
+            </div>
+            <div>
+              <div className="text-muted">Transactions checked</div>
+              <div className="text-lg font-semibold">{recon.transactions_checked}</div>
+            </div>
+            <div>
+              <div className="text-muted">Issue count</div>
+              <div className="text-lg font-semibold">{recon.issue_count}</div>
+            </div>
+            <div>
+              <div className="text-muted">Status</div>
+              <div className="text-lg font-semibold">{recon.status}</div>
+            </div>
           </div>
           {recon.issues?.length > 0 && (
-            <ul className="mt-3 text-sm text-red-700 list-disc list-inside">
+            <ul className="mt-4 space-y-1 text-sm text-rose-700">
               {recon.issues.map((i: string, idx: number) => (
-                <li key={idx}>{i}</li>
+                <li key={idx} className="flex gap-2">
+                  <span>•</span>
+                  <span>{i}</span>
+                </li>
               ))}
             </ul>
           )}
         </div>
       )}
 
-      <div className="bg-white rounded-lg shadow p-5">
-        <h2 className="font-semibold mb-3">System Clearing Balances</h2>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-slate-500 border-b">
-              <th className="py-2">Account ID</th>
-              <th className="py-2">Type</th>
-              <th className="py-2 text-right">Balance (paise)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {clearing.map((c) => (
-              <tr key={c.account_id} className="border-b last:border-0">
-                <td className="py-2 text-xs text-slate-500">{c.account_id}</td>
-                <td className="py-2">{c.account_type}</td>
-                <td className="py-2 text-right">{(c.balance_paise / 100).toFixed(2)}</td>
+      <Card className="p-6">
+        <h2 className="font-semibold text-lg mb-4">System Clearing Balances</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-2 font-medium">Account ID</th>
+                <th className="py-2 font-medium">Type</th>
+                <th className="py-2 font-medium text-right">Balance</th>
               </tr>
-            ))}
-            {clearing.length === 0 && (
-              <tr>
-                <td colSpan={3} className="py-4 text-center text-slate-500">
-                  No clearing accounts.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {clearing.map((c) => (
+                <tr key={c.account_id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                  <td className="py-2.5 text-xs text-muted font-mono">{c.account_id}</td>
+                  <td className="py-2.5">{c.account_type}</td>
+                  <td className="py-2.5 text-right font-medium">{(c.balance_paise / 100).toFixed(2)}</td>
+                </tr>
+              ))}
+              {clearing.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="py-8 text-center text-muted">
+                    No clearing accounts.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 }

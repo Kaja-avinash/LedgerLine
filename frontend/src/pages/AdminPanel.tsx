@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Shield, RefreshCw } from 'lucide-react';
 import { fetchUsers, fetchAllAccounts, freezeAccount, unfreezeAccount, type AuditUser, type Account } from '../lib/ledger';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Alert } from '../components/ui/Alert';
 
 function formatPaise(p: number) {
   return `₹${(p / 100).toFixed(2)}`;
@@ -40,71 +45,78 @@ export default function AdminPanel() {
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Admin Panel</h1>
-      {error && <div className="text-red-600 text-sm">{error}</div>}
+    <div className="space-y-8">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Shield className="w-6 h-6 text-brand-600" />
+          <h1 className="text-2xl font-semibold">Admin Panel</h1>
+        </div>
+        <Button variant="secondary" onClick={load}>
+          <RefreshCw className="w-4 h-4" /> Refresh
+        </Button>
+      </div>
+      {error && <Alert kind="error">{error}</Alert>}
 
-      <div className="bg-white rounded-lg shadow p-5">
-        <h2 className="font-semibold mb-3">Users ({users.length})</h2>
+      <Card className="p-6">
+        <h2 className="font-semibold text-lg mb-4">Users <span className="text-muted text-sm font-normal">({users.length})</span></h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-slate-500 border-b">
-                <th className="py-2">Email</th>
-                <th className="py-2">Role</th>
-                <th className="py-2">Active</th>
-                <th className="py-2">Created</th>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-2 font-medium">Email</th>
+                <th className="py-2 font-medium">Role</th>
+                <th className="py-2 font-medium">Active</th>
+                <th className="py-2 font-medium">Created</th>
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} className="border-b last:border-0">
-                  <td className="py-2">{u.email}</td>
-                  <td className="py-2">{u.role}</td>
-                  <td className="py-2">{u.is_active ? 'Yes' : 'No'}</td>
-                  <td className="py-2 text-xs text-slate-500">{new Date(u.created_at).toLocaleString()}</td>
+                <tr key={u.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                  <td className="py-2.5">{u.email}</td>
+                  <td className="py-2.5"><Badge tone="info">{u.role}</Badge></td>
+                  <td className="py-2.5">{u.is_active ? 'Yes' : 'No'}</td>
+                  <td className="py-2.5 text-xs text-muted">{new Date(u.created_at).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
 
-      <div className="bg-white rounded-lg shadow p-5">
-        <h2 className="font-semibold mb-3">Accounts ({accounts.length})</h2>
+      <Card className="p-6">
+        <h2 className="font-semibold text-lg mb-4">Accounts <span className="text-muted text-sm font-normal">({accounts.length})</span></h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-slate-500 border-b">
-                <th className="py-2">Number</th>
-                <th className="py-2">Type</th>
-                <th className="py-2">Owner</th>
-                <th className="py-2 text-right">Balance</th>
-                <th className="py-2">Status</th>
-                <th className="py-2">Action</th>
+              <tr className="text-left text-slate-500 border-b border-slate-200">
+                <th className="py-2 font-medium">Number</th>
+                <th className="py-2 font-medium">Type</th>
+                <th className="py-2 font-medium">Owner</th>
+                <th className="py-2 font-medium text-right">Balance</th>
+                <th className="py-2 font-medium">Status</th>
+                <th className="py-2 font-medium">Action</th>
               </tr>
             </thead>
             <tbody>
               {accounts.map((a) => (
-                <tr key={a.id} className="border-b last:border-0">
-                  <td className="py-2">{a.account_number}</td>
-                  <td className="py-2">{a.account_type}</td>
-                  <td className="py-2 text-xs text-slate-500">{a.user_id ?? '—'}</td>
-                  <td className="py-2 text-right">{formatPaise(a.projected_balance_paise)}</td>
-                  <td className="py-2">{a.status}</td>
-                  <td className="py-2">
+                <tr key={a.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                  <td className="py-2.5">{a.account_number}</td>
+                  <td className="py-2.5">{a.account_type}</td>
+                  <td className="py-2.5 text-xs text-muted">{a.user_id ?? '—'}</td>
+                  <td className="py-2.5 text-right font-medium">{formatPaise(a.projected_balance_paise)}</td>
+                  <td className="py-2.5">
+                    <Badge tone={a.status === 'ACTIVE' ? 'success' : 'warning'}>{a.status}</Badge>
+                  </td>
+                  <td className="py-2.5">
                     {a.account_type === 'CUSTOMER' && (
-                      <button
+                      <Button
+                        variant={a.status === 'ACTIVE' ? 'secondary' : 'primary'}
                         onClick={() => toggleFreeze(a)}
                         disabled={busy === a.id}
-                        className={`text-xs px-2 py-1 rounded ${
-                          a.status === 'ACTIVE'
-                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                            : 'bg-green-100 text-green-700 hover:bg-green-200'
-                        }`}
+                        className="text-xs px-2 py-1"
                       >
                         {a.status === 'ACTIVE' ? 'Freeze' : 'Unfreeze'}
-                      </button>
+                      </Button>
                     )}
                   </td>
                 </tr>
@@ -112,7 +124,7 @@ export default function AdminPanel() {
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

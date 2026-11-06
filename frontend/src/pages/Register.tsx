@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Wallet } from 'lucide-react';
 import { api } from '../lib/api';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Alert } from '../components/ui/Alert';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -27,54 +30,55 @@ export default function Register() {
   }
 
   return (
-    <div className="max-w-md mx-auto bg-white rounded-lg shadow p-8">
-      <h1 className="text-2xl font-semibold mb-6">Create account</h1>
-      {error && <div className="mb-4 text-sm text-red-600">{error}</div>}
-      <form onSubmit={onSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Email</label>
-          <input
+    <div className="min-h-[70vh] flex items-center justify-center">
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-[var(--shadow-card)] border border-border p-8 animate-fade-in">
+        <div className="flex items-center gap-2 mb-6">
+          <span className="w-9 h-9 rounded-lg bg-brand-600 flex items-center justify-center">
+            <Wallet className="w-5 h-5 text-white" />
+          </span>
+          <h1 className="text-2xl font-semibold">Create account</h1>
+        </div>
+        {error && <div className="mb-4"><Alert kind="error">{error}</Alert></div>}
+        <form onSubmit={onSubmit} className="space-y-4">
+          <Input
+            label="Email"
             type="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-slate-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-        </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">Password (min 8 chars)</label>
-          <div className="relative">
-            <input
-              type={showPw ? 'text' : 'password'}
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-slate-300 rounded px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPw((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500"
-            >
-              {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-            </button>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Password (min 8 chars)</label>
+            <div className="relative">
+              <input
+                type={showPw ? 'text' : 'password'}
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPw((s) => !s)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                aria-label={showPw ? 'Hide password' : 'Show password'}
+              >
+                {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
-        </div>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {submitting ? 'Creating...' : 'Create account'}
-        </button>
-      </form>
-      <p className="mt-4 text-sm text-slate-600">
-        Already have an account?{' '}
-        <Link to="/login" className="text-indigo-600 hover:underline">
-          Sign in
-        </Link>
-      </p>
+          <Button type="submit" disabled={submitting} className="w-full">
+            {submitting ? 'Creating...' : 'Create account'}
+          </Button>
+        </form>
+        <p className="mt-4 text-sm text-muted">
+          Already have an account?{' '}
+          <Link to="/login" className="text-brand-600 hover:underline font-medium">
+            Sign in
+          </Link>
+        </p>
+      </div>
     </div>
   );
 }
