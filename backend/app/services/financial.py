@@ -726,3 +726,169 @@ class FinancialService:
         record.transaction_id = txn.id
 
         return FinancialResult(status_code=200, body=body, transaction_id=txn.id)
+
+    # ------------------------------------------------------------------ #
+    # Reversal (full only)
+    # ------------------------------------------------------------------ #
+    def reverse(
+        self,
+        *,
+        initiator: "User",
+        original_transaction_id: uuid.UUID,
+        reason: str,
+        idempotency_key: str,
+        request_path: str,
+        request_method: str = "POST",
+        request_payload: dict[str, Any],
+    ) -> FinancialResult:
+        request_hash = self._fingerprint(initiator.id, request_method, request_path, request_payload)
+        return self._run(
+            lambda: self._reverse_impl(
+                initiator=initiator,
+                original_transaction_id=original_transaction_id,
+                reason=reason,
+                idempotency_key=idempotency_key,
+                request_path=request_path,
+                request_method=request_method,
+                request_hash=request_hash,
+            )
+        )
+
+    def _reverse_impl(
+        self,
+        *,
+        initiator: "User",
+        original_transaction_id: uuid.UUID,
+        reason: str,
+        idempotency_key: str,
+        request_path: str,
+        request_method: str,
+        request_hash: str,
+    ) -> FinancialResult:
+        if not reason or not reason.strip():
+            raise FinancialError("REASON_REQUIRED", "Reversal requires a reason narrative", 400)
+
+        claimed, record = self._claim_key(
+            user_id=initiator.id,
+            key=idempotency_key,
+            request_path=request_path,
+            request_method=request_method,
+            request_hash=request_hash,
+        )
+        if not claimed:
+            return self._verify_replay(record, request_hash)
+
+        original = (
+            self.db.query(FinancialTransaction)
+            .filter(FinancialTransaction.id == original_transaction_id)
+            .first()
+        )
+        if original is None:
+            raise FinancialError("ORIGINAL_NOT_FOUND", "Original transaction not found", 404)
+        if not original.is_closed:
+            raise FinancialError("ORIGINAL_NOT_COMPLETED", "Original transaction is not completed", 400)
+        if original.reverses_transaction_id is not None:
+            raise FinancialError("CANNOT_REVERSE_REVERSAL", "A reversal cannot be reversed", 400)
+
+        existing_reversal = (
+            self.db.query(FinancialTransaction)
+            .filter(FinancialTransaction.reverses_transaction_id == original.id)
+            .first()
+        )
+        if existing_reversal is not None:
+            raise FinancialError("ALREADY_REVERSED", "Transaction already has a reversal", 400)
+
+        postings = (
+            self.db.query(LedgerEntry)
+            .filter(LedgerEntry.transaction_id == original.id)
+            .all()
+        )
+        if not postings:
+            raise FinancialError("INVALID_ORIGINAL", "Original has no postings", 400)
+
+        account_ids = [p.account_id for p in postings]
+        locked = self._lock_accounts(account_ids)
+
+        for p in postings:
+            if p.entry_type == "CREDIT":
+                acc = locked[p.account_id]
+                if acc.account_type == "CUSTOMER" and acc.projected_balance_paise < p.amount_paise:
+                    observed = acc.projected_balance_paise
+                    seq = self._next_seq(acc)
+                    self.db.add(
+                        RefusedOperation(
+                            user_id=initiator.id,
+                            account_id=acc.id,
+                            observed_balance_paise=observed,
+                            account_activity_sequence=seq,
+                            operation_type="REVERSAL",
+                            attempted_amount_paise=p.amount_paise,
+                            reason_code="INSUFFICIENT_FUNDS_FOR_REVERSAL",
+                            reason_message="Insufficient funds for reversal",
+                            idempotency_key=idempotency_key,
+                            request_metadata={"original_transaction_id": str(original.id)},
+                        )
+                    )
+                    body = {
+                        "error_code": "INSUFFICIENT_FUNDS_FOR_REVERSAL",
+                        "message": "Insufficient funds for reversal",
+                        "status": "REFUSED",
+                    }
+                    record.status = "REFUSED"
+                    record.response_status_code = 400
+                    record.response_body = body
+                    record.transaction_id = None
+                    self.db.commit()
+                    raise InsufficientFundsError("Insufficient funds for reversal")
+
+        for p in postings:
+            acc = locked[p.account_id]
+            if p.entry_type == "DEBIT":
+                acc.projected_balance_paise += p.amount_paise
+            else:
+                acc.projected_balance_paise -= p.amount_paise
+            self._validate_active(acc)
+
+        seqs = {aid: self._next_seq(locked[aid]) for aid in set(account_ids)}
+
+        txn = FinancialTransaction(
+            transaction_type="REVERSAL",
+            initiator_user_id=initiator.id,
+            reference_id=f"REV-{uuid.uuid4()}",
+            description=f"Reversal of {original.reference_id}: {reason}",
+            transaction_metadata={"original_transaction_id": str(original.id), "reason": reason},
+            reverses_transaction_id=original.id,
+            is_closed=False,
+        )
+        self.db.add(txn)
+        self.db.flush()
+
+        for p in postings:
+            inv_type = "CREDIT" if p.entry_type == "DEBIT" else "DEBIT"
+            self.db.add(
+                LedgerEntry(
+                    transaction_id=txn.id,
+                    account_id=p.account_id,
+                    entry_type=inv_type,
+                    amount_paise=p.amount_paise,
+                    account_activity_sequence=seqs[p.account_id],
+                    running_balance_paise=locked[p.account_id].projected_balance_paise,
+                )
+            )
+
+        self.db.flush()
+        txn.is_closed = True
+        txn.posted_at = datetime.now(timezone.utc)
+
+        body = {
+            "transaction_id": str(txn.id),
+            "transaction_type": "REVERSAL",
+            "reverses_transaction_id": str(original.id),
+            "status": "COMPLETED",
+        }
+        record.status = "COMPLETED"
+        record.response_status_code = 200
+        record.response_body = body
+        record.transaction_id = txn.id
+
+        return FinancialResult(status_code=200, body=body, transaction_id=txn.id)
