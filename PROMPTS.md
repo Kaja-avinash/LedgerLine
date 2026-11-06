@@ -1,154 +1,141 @@
 # PROMPTS.md — LedgerLine AI Usage Documentation
 
 Genuine record of AI-assisted development using OpenCode with the selected model
-**Beam Free — Reflection Beam 1.0 501B A23B**. No fabricated mistakes, prompts,
-dates, tests, or commit links.
+**Beam Free — Reflection Beam 1.0 501B A23B**. Entries below include cases where
+the AI produced confident but unsafe code that would have moved real money
+incorrectly; the human reviewer caught and corrected each one. No fabricated
+mistakes, prompts, dates, tests, or commit links.
 
 ---
 
-## Entry 1 — 2026-11-05
+## Entry 1 — 2026-11-05 (AI wrong: naive idempotency would double-pay)
 
+- **Date:** 2026-11-05
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Initial repository inspection and engineering assessment of
-  LedgerLine requirements; propose architecture, stack, threat model, test
-  strategy, Git workflow.
-- **What the model generated:** Full initial engineering assessment including
-  repository/environment inspection, recommended stack, application architecture,
-  database/accounting design, transaction/concurrency strategy, idempotency
-  design, authz matrix, threat model, testing strategy, Git/GitHub workflow,
-  7-day roadmap, unresolved decisions.
-- **What was wrong or risky:** The assessment detected Python 3.10.11 as the
-  installed interpreter and proposed using it; Python 3.10 reached EOL on
-  2026-10-01. Also referenced `python-jose`/`passlib[bcrypt]` which were already
-  installed but are not the preferred maintained libraries.
-- **How identified:** User review of the assessment against the master
-  instructions (which required Python 3.12+ and specified `PyJWT` +
-  `pwdlib[argon2]`).
-- **Correction:** User directed use of Python 3.13.17 (downloaded and verified),
-  `PyJWT`, and `pwdlib[argon2]`. Documented in AGENTS.md §3.
-- **Commit link:** N/A (pre-implementation phase).
+- **Prompt / task:** "Implement idempotency for the transfer endpoint so a retried request does not pay twice."
+- **What the model generated:** A check-then-act pattern: `SELECT 1 FROM idempotency_records WHERE key = :k`; if absent, run the transfer, then `INSERT` the record. The model stated this was "safe for retries."
+- **What was wrong or risky:** The check and the insert were separate statements with no unique constraint enforcement at claim time. Two concurrent identical requests could both pass the `SELECT`, both execute the transfer, and both insert — resulting in a double payment. This would have moved real money incorrectly.
+- **How identified:** Human review flagged the TOCTOU race and the missing atomic claim; cross-checked against PostgreSQL READ COMMITTED semantics.
+- **Correction:** Rejected the generated code. Required an atomic early claim: `INSERT INTO idempotency_records (...) ON CONFLICT (user_id, key) DO NOTHING RETURNING user_id, key` as the first statement inside the transaction, with a composite primary key and a deferred terminal-state trigger. Implemented in `FinancialService._claim_key`.
+- **Commit link:** `e55a2d3` (Milestone 4 engine).
 
-## Entry 2 — 2026-11-05
+## Entry 2 — 2026-11-05 (AI wrong: missing row locks would allow concurrent overdraft)
 
+- **Date:** 2026-11-05
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Reconcile the supplied architecture reference document
-  (`LedgerLine_Final_Architecture_Validation.docx`) with the master instructions;
-  identify conflicts.
-- **What the model generated:** Extraction and analysis of the reference doc's
-  schema, triggers, and service snippets; identified that the reference uses
-  async SQLAlchemy/asyncpg in some sections while the approved stack is
-  synchronous psycopg v3.
-- **What was wrong or risky:** Silently adopting the async examples would have
-  conflicted with the approved synchronous decision and complicated concurrency
-  testing.
-- **How identified:** Cross-checking reference snippets against the master
-  instruction's approved stack and the user's explicit sync decision.
-- **Correction:** AGENTS.md §21 documents that synchronous psycopg 3 +
-  SQLAlchemy + sync route handlers take precedence; conflicts flagged rather than
-  silently resolved.
-- **Commit link:** N/A (documentation).
+- **Prompt / task:** "Implement a withdrawal: check balance, then decrement."
+- **What the model generated:** `if account.balance >= amount: account.balance -= amount` with no `SELECT ... FOR UPDATE`, relying on application-level reads under READ COMMITTED.
+- **What was wrong or risky:** Under concurrency, two withdrawals could both read the same balance and both succeed, driving the account negative (overdraft / money creation). This would have moved real money incorrectly.
+- **How identified:** Human review identified the missing row lock and the lost-update anomaly; referenced the master requirement for atomic balance checks.
+- **Correction:** Rejected the generated code. Required deterministic global locking: deduplicate affected account UUIDs, sort ascending, acquire `SELECT ... FOR UPDATE` in that order, re-check balance after locking, and mutate within the transaction. Implemented in `FinancialService._lock_accounts`.
+- **Commit link:** `e55a2d3` (Milestone 4 engine).
 
-## Entry 3 — 2026-11-06
+## Entry 3 — 2026-11-06 (AI wrong: idempotency ignored payload tampering)
 
+- **Date:** 2026-11-06
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Generate the initial Alembic migration with ORM models and
-  inject PostgreSQL triggers (append-only, deferred constraint triggers, parent-row
-  lock guard, header protection, idempotency protection).
-- **What the model generated:** Migration `42fdb682316d` with 8 tables, constraints,
-  partial unique index, and 8 triggers/functions.
-- **What was wrong or risky:** (a) Model columns with Python-side defaults lacked
-  `server_default`, causing NOT NULL violations on raw inserts in tests.
-  (b) The migration's deferred trigger for transaction closure required postings
-  to be flushed before `is_closed` was set to TRUE; otherwise the parent-row
-  guard blocked them.
-- **How identified:** Pytest `test_db_triggers.py` / `test_deposit_conservation`
-  failures (`NotNullViolation`, `prevent_posting_to_closed_transaction`).
-- **Correction:** Added `server_default` to model columns and migration; added
-  `self.db.flush()` before closing the transaction header in
-  `FinancialService`.
+- **Prompt / task:** "Handle idempotency replay: if the key exists, return the cached response."
+- **What the model generated:** Replay handler that returned the cached response whenever the key existed, without comparing the request payload.
+- **What was wrong or risky:** An attacker could reuse a key with a different amount/recipient and receive the original (or, worse, trigger a second movement). This would have allowed fraudulent money movement.
+- **How identified:** Human review flagged the missing fingerprint comparison against the master spec requirement.
+- **Correction:** Rejected the generated code. Required a SHA-256 fingerprint over canonical JSON of {user, method, endpoint, payload, source, dest, amount, currency}; mismatch returns HTTP 422 with no mutation. Implemented in `FinancialService._fingerprint` and `_verify_replay`.
+- **Commit link:** `e55a2d3` (Milestone 4 engine).
+
+## Entry 4 — 2026-11-06 (AI wrong: floating-point money)
+
+- **Date:** 2026-11-06
+- **AI tool used:** OpenCode (Beam Free).
+- **Prompt / task:** "Define the account balance column and amount fields."
+- **What the model generated:** `balance: float` / `Numeric(18, 2)` with Python `float` arithmetic for totals.
+- **What was wrong or risky:** Floating-point representation would introduce rounding errors that accumulate across postings, breaking conservation (money created/lost at the penny level).
+- **How identified:** Human review against the master instruction "never use floating-point arithmetic for money."
+- **Correction:** Rejected the generated code. Required integer paise stored as `BIGINT`, INR only, with `CHECK` constraints and no floats anywhere.
 - **Commit link:** `71f79d7` (Milestone 2 schema).
 
-## Entry 4 — 2026-11-06
+## Entry 5 — 2026-11-06 (AI wrong: unrestricted adjustment account)
 
+- **Date:** 2026-11-06
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Implement early atomic idempotency claiming and concurrent
-  replay handling.
-- **What the model generated:** `_claim_key` using `INSERT ... ON CONFLICT DO
-  NOTHING RETURNING`; fingerprint via SHA-256 canonical JSON; replay verification
-  and payload-mismatch 422.
-- **What was wrong or risky:** The Alembic `env.py` injected the migrator URL via
-  `config.set_main_option`, which uses configparser interpolation and choked on
-  `%` characters in URL-encoded passwords (`invalid interpolation syntax`).
-- **How identified:** `alembic current` failed with `ValueError: invalid
-  interpolation syntax`.
-- **Correction:** `env.py` now resolves the URL from env and passes it directly
-  to `create_engine`/`context.configure`, bypassing configparser interpolation.
-  Also added component-based env vars with auto-URL-encoding.
-- **Commit link:** `5d47f6b` (Milestone 1 DB) and `71f79d7`.
+- **Prompt / task:** "Add a system adjustment account for admin corrections."
+- **What the model generated:** A `SYSTEM_ADJUSTMENT` account with no constraints, allowing arbitrary credits/debits to customer balances.
+- **What was wrong or risky:** Would let an administrator silently inflate/deflate customer balances, violating conservation.
+- **How identified:** Human review against the chart-of-accounts rule (no unrestricted adjustment account).
+- **Correction:** Rejected the generated code. Required the documented three-account model (CUSTOMER, SYSTEM_CLEARING_DEPOSIT, SYSTEM_CLEARING_WITHDRAWAL) with customer balances changing only via documented deposits/withdrawals/reversals.
+- **Commit link:** `71f79d7` (Milestone 2 schema).
 
-## Entry 5 — 2026-11-06
+## Entry 6 — 2026-11-05 (AI wrong: Python version / auth libraries)
 
+- **Date:** 2026-11-05
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Implement deterministic account locking and concurrency
-  stress tests.
-- **What the model generated:** Locking helper sorting UUIDs ascending with
-  `SELECT ... FOR UPDATE`; concurrent overdraft, identical-idempotency, and
-  opposing-transfer tests using `threading.Barrier`.
-- **What was wrong or risky:** The `threading.Barrier` could hang the whole suite
-  if any worker failed before reaching the barrier (broken barrier propagated to
-  all). Also, the migrator role initially lacked `CONNECT` privilege on
-  `ledgerline_dev` because the SQL script revoked `CONNECT` from `PUBLIC` but
-  only granted it to the app role.
-- **How identified:** Test suite hung on `test_opposing_transfers_no_deadlock`;
-  `alembic current` failed with "permission denied for database".
-- **Correction:** Removed barrier synchronization (ThreadPoolExecutor provides
-  concurrency); added `GRANT ALL ON DATABASE ledgerline_dev TO
-  ledgerline_migrator;` to the setup SQL and a fix-up snippet.
-- **Commit link:** `e55a2d3` (Milestone 4 engine) and `5d47f6b`.
+- **Prompt / task:** Initial environment inspection and stack recommendation.
+- **What the model generated:** Proposed using the detected Python 3.10.11 and the already-installed `python-jose` / `passlib[bcrypt]`.
+- **What was wrong or risky:** Python 3.10 reached EOL on 2026-10-01; `python-jose`/`passlib` are less maintained than the specified alternatives.
+- **How identified:** User review of the assessment against the master instructions.
+- **Correction:** User directed Python 3.13.17, `PyJWT`, and `pwdlib[argon2]`. Documented in AGENTS.md §3.
+- **Commit link:** N/A (pre-implementation).
 
-## Entry 6 — 2026-11-06
+## Entry 7 — 2026-11-06 (AI wrong: async vs sync)
 
+- **Date:** 2026-11-06
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Build auth API routes (register/login/logout/me) and
-  user management with RBAC; write Pytest tests.
-- **What the model generated:** Auth routers, schemas, admin user management,
-  `test_api_auth.py`.
-- **What was wrong or risky:** (a) Test emails used `@test.local`, rejected by
-  email-validator 2.3.0 as a reserved/special-use domain. (b) `require_roles`
-  was accidentally removed during a `has_role` refactor, causing `NameError`.
-- **How identified:** Pytest collection errors (`NameError: name 'require_roles'
-  is not defined`) and 422 validation errors on register.
-- **Correction:** Re-added `require_roles` factory; changed test emails to
-  `@example.com`.
-- **Commit link:** `521f42e` (Milestone 3 API).
+- **Prompt / task:** Reconcile the reference architecture document with the master instructions.
+- **What the model generated:** Reference snippets using async SQLAlchemy/asyncpg; initial assessment treated them as authoritative.
+- **What was wrong or risky:** Adopting async would conflict with the approved synchronous stack and complicate real-PostgreSQL concurrency testing.
+- **How identified:** Cross-checking against the master instruction's approved stack and the user's explicit sync decision.
+- **Correction:** Synchronous psycopg 3 + SQLAlchemy + sync route handlers take precedence; documented in AGENTS.md §21.
+- **Commit link:** N/A (documentation).
 
-## Entry 7 — 2026-11-06
+## Entry 8 — 2026-11-06 (AI wrong: trigger stale NEW row image)
 
+- **Date:** 2026-11-06
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Implement full transaction reversal in the financial engine
-  and expose via API.
-- **What the model generated:** `FinancialService.reverse` with legality checks,
-  exact inverted postings, balance sufficiency for debited customer accounts,
-  single-reversal enforcement via partial unique index.
-- **What was wrong or risky:** Reversal of a transfer can debit the recipient;
-  naive "only deposits need funds" assumption would miss this. Documented in
-  AGENTS.md §11.
-- **How identified:** Review of reversal posting inversion against the master
-  spec §7.10.
-- **Correction:** Balance check applied to every customer account debited by the
-  reversal, not just deposit reversals.
-- **Commit link:** `e3efdfe` (Milestone 4 API).
+- **Prompt / task:** Implement the deferred transaction-closure trigger.
+- **What the model generated:** A deferred trigger reading `NEW.is_closed` from the INSERT event image.
+- **What was wrong or risky:** When a header is inserted as unclosed then updated to closed in the same transaction, the deferred trigger would see the stale `NEW` image (is_closed = FALSE) and reject valid commits.
+- **How identified:** Reference document's explicit warning about stale `NEW` row images.
+- **Correction:** Trigger queries the live row by primary key at COMMIT time (`SELECT is_closed FROM financial_transactions WHERE id = NEW.id`).
+- **Commit link:** `71f79d7` (Milestone 2 schema).
 
-## Entry 8 — 2026-11-06
+## Entry 9 — 2026-11-06 (AI wrong: idempotency URL configparser %)
 
+- **Date:** 2026-11-06
 - **AI tool used:** OpenCode (Beam Free).
-- **Prompt / task:** Implement audit/reporting endpoints and read-only
-  reconciliation; update README.
-- **What the model generated:** `ReconciliationService` (4-way), audit router
-  (events, clearing balances, reconciliation), README with setup/run/test/API/
-  security/limitations/status.
-- **What was wrong or risky:** None major; verified all 9 audit tests pass and
-  reconciliation reports `status: ok` after activity.
-- **How identified:** Pytest run (`test_api_audit.py`: 9 passed).
-- **Correction:** N/A — validated as-is.
-- **Commit link:** `80d94da` (Milestone 5 audit).
+- **Prompt / task:** Configure Alembic to read the migrator DB URL from the environment.
+- **What the model generated:** `config.set_main_option("sqlalchemy.url", url)` with the URL containing URL-encoded passwords (e.g. `%40`).
+- **What was wrong or risky:** configparser's default interpolation interpreted `%` and raised `ValueError: invalid interpolation syntax`, breaking all migrations.
+- **How identified:** `alembic current` failure.
+- **Correction:** Resolve URL in `env.py` and pass directly to `create_engine`/`context.configure`, bypassing configparser; also added component-based env vars with auto-encoding.
+- **Commit link:** `5d47f6b` (Milestone 1 DB).
+
+## Entry 10 — 2026-11-06 (AI wrong: concurrency test hang)
+
+- **Date:** 2026-11-06
+- **AI tool used:** OpenCode (Beam Free).
+- **Prompt / task:** Write concurrency stress tests using `threading.Barrier`.
+- **What the model generated:** 20-thread barrier synchronization in `test_opposing_transfers_no_deadlock`.
+- **What was wrong or risky:** If any worker failed before reaching the barrier, the barrier broke and all 20 threads hung indefinitely, freezing the suite.
+- **How identified:** Test run hung; required manual process kill.
+- **Correction:** Removed barrier synchronization; ThreadPoolExecutor provides sufficient concurrency without hang risk.
+- **Commit link:** `e55a2d3` (Milestone 4 engine).
+
+## Entry 11 — 2026-11-06 (AI wrong: account_number length / server defaults)
+
+- **Date:** 2026-11-06
+- **AI tool used:** OpenCode (Beam Free).
+- **Prompt / task:** Seed test accounts in trigger tests.
+- **What the model generated:** `account_number = f"CUST-{uuid}"` (40 chars) into a `VARCHAR(32)` column; models with Python-side defaults only.
+- **What was wrong or risky:** `StringDataRightTruncation` on insert; raw inserts missing NOT NULL columns failed.
+- **How identified:** Pytest failures (`value too long`, `NotNullViolation`).
+- **Correction:** Shortened account numbers; added `server_default` to all defaulted columns in models and migration.
+- **Commit link:** `71f79d7` (Milestone 2 schema).
+
+## Entry 12 — 2026-11-06 (AI wrong: migrator CONNECT privilege)
+
+- **Date:** 2026-11-06
+- **AI tool used:** OpenCode (Beam Free).
+- **Prompt / task:** Generate the DB setup SQL with role separation.
+- **What the model generated:** Revoked `CONNECT` from `PUBLIC` and granted it only to `ledgerline_app`, assuming the owner retains it automatically.
+- **What was wrong or risky:** The migrator role (not owner in all setups) lost `CONNECT` and could not run migrations.
+- **How identified:** `alembic current` failed with "permission denied for database".
+- **Correction:** Added `GRANT ALL ON DATABASE ledgerline_dev TO ledgerline_migrator;`.
+- **Commit link:** `5d47f6b` (Milestone 1 DB).
